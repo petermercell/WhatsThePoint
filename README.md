@@ -16,4 +16,4 @@ another way is to load it on nuke startup using init.py.
 
 
 
-[![](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/donate/?hosted_button_id=5PAUAQDNX8GZ4)
+<! -- [![](https://www.paypalobjects.com/en_US/i/btn/btn_donateCC_LG.gif)](https://www.paypal.com/donate/?hosted_button_id=5PAUAQDNX8GZ4) -->
