@@ -1,0 +1,127 @@
+cmake_minimum_required(VERSION 3.16)
+
+project(WhatsThePoint)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+cmake_policy(SET CMP0074 NEW)
+
+# ============================================================================
+# RPATH Configuration - Disable completely
+# ============================================================================
+set(CMAKE_SKIP_BUILD_RPATH TRUE)
+set(CMAKE_SKIP_INSTALL_RPATH TRUE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+set(CMAKE_INSTALL_RPATH "")
+set(CMAKE_BUILD_RPATH "")
+
+# ============================================================================
+# Nuke Configuration
+# ============================================================================
+if(NOT DEFINED NUKE_VERSION)
+    set(NUKE_VERSION "16.0v6")
+endif()
+set(NDKDIR /opt/Nuke${NUKE_VERSION})
+
+message(STATUS "Nuke Version: ${NUKE_VERSION}")
+message(STATUS "Nuke Directory: ${NDKDIR}")
+
+if(NOT EXISTS ${NDKDIR})
+    message(FATAL_ERROR "Nuke directory not found: ${NDKDIR}")
+endif()
+if(NOT EXISTS ${NDKDIR}/libDDImage.so)
+    message(FATAL_ERROR "libDDImage.so not found in: ${NDKDIR}")
+endif()
+
+# ============================================================================
+# Qt6 Configuration - Headers only
+# ============================================================================
+if(NOT DEFINED Qt6_ROOT)
+    set(Qt6_ROOT "/home/pm/Qt6NEW/6.5.3/gcc_64")
+endif()
+
+set(Qt6_DIR "${Qt6_ROOT}/lib/cmake/Qt6")
+set(CMAKE_PREFIX_PATH "${Qt6_ROOT}" ${CMAKE_PREFIX_PATH})
+
+# ============================================================================
+# Compiler Configuration
+# ============================================================================
+add_compile_options(-fPIC)
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_SHARED_LIBRARY_PREFIX "")
+
+# Linker flags to prevent RPATH/RUNPATH
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--disable-new-dtags")
+
+# ============================================================================
+# Find Qt6 (for headers and AUTOMOC only)
+# ============================================================================
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGLWidgets)
+
+message(STATUS "Qt6 cmake found: ${Qt6_DIR}")
+message(STATUS "Qt6 Version: ${Qt6_VERSION}")
+
+# ============================================================================
+# Build Library
+# ============================================================================
+add_library(WhatsThePoint SHARED src/WhatsThePoint.cpp)
+target_sources(WhatsThePoint PRIVATE src/PointsListWidget.moc)
+
+target_include_directories(WhatsThePoint PRIVATE 
+    ${NDKDIR}/include
+)
+
+target_include_directories(WhatsThePoint SYSTEM PRIVATE
+    $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:Qt6::Gui,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:Qt6::Widgets,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:Qt6::OpenGL,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:Qt6::OpenGLWidgets,INTERFACE_INCLUDE_DIRECTORIES>
+)
+
+# Link to Nuke's libraries with -L and -l to avoid full path embedding
+target_link_directories(WhatsThePoint PRIVATE ${NDKDIR})
+target_link_libraries(WhatsThePoint PRIVATE
+    DDImage
+    Qt6Core
+    Qt6Gui
+    Qt6Widgets
+    Qt6OpenGL
+    Qt6OpenGLWidgets
+    OpenGL
+)
+
+# ============================================================================
+# Post-build: Strip RPATH/RUNPATH with patchelf
+# ============================================================================
+find_program(PATCHELF patchelf)
+if(PATCHELF)
+    add_custom_command(TARGET WhatsThePoint POST_BUILD
+        COMMAND ${PATCHELF} --remove-rpath $<TARGET_FILE:WhatsThePoint>
+        COMMENT "Removing RPATH/RUNPATH for portability"
+    )
+    message(STATUS "patchelf found: ${PATCHELF} (will strip RPATH)")
+else()
+    message(WARNING "patchelf not found - install it: sudo dnf install patchelf")
+    message(WARNING "Without patchelf, RPATH may be embedded in the plugin")
+endif()
+
+# ============================================================================
+# Installation
+# ============================================================================
+install(TARGETS WhatsThePoint DESTINATION ${CMAKE_INSTALL_PREFIX})
+
+# ============================================================================
+# Build Summary
+# ============================================================================
+message(STATUS "========================================")
+message(STATUS "Build Configuration Summary:")
+message(STATUS "  Plugin: WhatsThePoint.so")
+message(STATUS "  Nuke Version: ${NUKE_VERSION}")
+message(STATUS "  Nuke Directory: ${NDKDIR}")
+message(STATUS "  Qt6 Headers: ${Qt6_ROOT}")
+message(STATUS "  Qt6 Runtime: Nuke's Qt6 (portable)")
+message(STATUS "  RPATH: Stripped by patchelf")
+message(STATUS "  Install Prefix: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "========================================")
