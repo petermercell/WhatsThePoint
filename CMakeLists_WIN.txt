@@ -1,0 +1,206 @@
+cmake_minimum_required(VERSION 3.16)
+
+# CRITICAL: Set MSVC runtime library policy BEFORE project()
+if(WIN32)
+    cmake_policy(SET CMP0091 NEW)
+endif()
+
+project(WhatsThePoint LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+cmake_policy(SET CMP0074 NEW)
+
+# ============================================================================
+# Nuke Configuration
+# ============================================================================
+if(NOT DEFINED NUKE_VERSION)
+    set(NUKE_VERSION "16.0v6")
+endif()
+
+if(WIN32)
+    if(NOT DEFINED NDKDIR)
+        set(NDKDIR "C:/Program Files/Nuke${NUKE_VERSION}")
+    endif()
+else()
+    set(NDKDIR "/opt/Nuke${NUKE_VERSION}")
+endif()
+
+message(STATUS "Nuke Version: ${NUKE_VERSION}")
+message(STATUS "Nuke Directory: ${NDKDIR}")
+
+if(NOT EXISTS "${NDKDIR}")
+    message(FATAL_ERROR "Nuke directory not found: ${NDKDIR}")
+endif()
+
+# ============================================================================
+# Qt6 Configuration
+# ============================================================================
+if(NOT DEFINED Qt6_ROOT)
+    if(WIN32)
+        set(Qt6_ROOT "C:/Qt6/6.5.3/msvc2019_64")
+    else()
+        set(Qt6_ROOT "/home/pm/Qt6NEW/6.5.3/gcc_64")
+    endif()
+endif()
+
+set(Qt6_DIR "${Qt6_ROOT}/lib/cmake/Qt6")
+set(CMAKE_PREFIX_PATH "${Qt6_ROOT}" ${CMAKE_PREFIX_PATH})
+
+# ============================================================================
+# Platform-specific Configuration
+# ============================================================================
+if(WIN32)
+    # Windows: Static runtime, no VC++ Redistributable needed
+    set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    
+    add_definitions(
+        -DWIN32 -D_WINDOWS -DNDEBUG -DNOMINMAX
+        -D_CRT_SECURE_NO_WARNINGS -D_SCL_SECURE_NO_WARNINGS
+        -D_USE_MATH_DEFINES -DWIN32_LEAN_AND_MEAN
+    )
+    
+    if(MSVC)
+        add_compile_options(/W3 /O2 /Ob2 /EHsc /FS /nologo)
+    endif()
+    
+    if(NOT EXISTS "${NDKDIR}/DDImage.lib")
+        message(FATAL_ERROR "DDImage.lib not found in: ${NDKDIR}")
+    endif()
+else()
+    # Linux: Disable RPATH for portability
+    set(CMAKE_SKIP_BUILD_RPATH TRUE)
+    set(CMAKE_SKIP_INSTALL_RPATH TRUE)
+    set(CMAKE_BUILD_WITH_INSTALL_RPATH FALSE)
+    set(CMAKE_INSTALL_RPATH "")
+    set(CMAKE_BUILD_RPATH "")
+    set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,--disable-new-dtags")
+    
+    add_compile_options(-fPIC)
+    set(CMAKE_SHARED_LIBRARY_PREFIX "")
+    
+    if(NOT EXISTS "${NDKDIR}/libDDImage.so")
+        message(FATAL_ERROR "libDDImage.so not found in: ${NDKDIR}")
+    endif()
+endif()
+
+# ============================================================================
+# Qt6 and AUTOMOC
+# ============================================================================
+set(CMAKE_AUTOMOC ON)
+
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGLWidgets)
+
+message(STATUS "Qt6 cmake found: ${Qt6_DIR}")
+message(STATUS "Qt6 Version: ${Qt6_VERSION}")
+
+# ============================================================================
+# Build Library
+# ============================================================================
+add_library(WhatsThePoint SHARED src/WhatsThePoint.cpp)
+target_sources(WhatsThePoint PRIVATE src/PointsListWidget.moc)
+
+# Include directories
+target_include_directories(WhatsThePoint PRIVATE "${NDKDIR}/include")
+
+# ============================================================================
+# Linking
+# ============================================================================
+if(WIN32)
+    set_property(TARGET WhatsThePoint PROPERTY 
+        MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+    
+    # Link DDImage from Nuke, Qt6 from local installation
+    # At runtime, Nuke's Qt6 DLLs will be used (same version 6.5.3)
+    target_link_libraries(WhatsThePoint PRIVATE
+        "${NDKDIR}/DDImage.lib"
+        Qt6::Core
+        Qt6::Gui
+        Qt6::Widgets
+        Qt6::OpenGL
+        Qt6::OpenGLWidgets
+        opengl32
+    )
+    
+    set_target_properties(WhatsThePoint PROPERTIES
+        OUTPUT_NAME "WhatsThePoint"
+        SUFFIX ".dll"
+        RUNTIME_OUTPUT_DIRECTORY_RELEASE ${CMAKE_BINARY_DIR}/Release
+    )
+else()
+    # Linux: Use Nuke's Qt6 include extraction + link to Nuke's libs
+    target_include_directories(WhatsThePoint SYSTEM PRIVATE
+        $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:Qt6::Gui,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:Qt6::Widgets,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:Qt6::OpenGL,INTERFACE_INCLUDE_DIRECTORIES>
+        $<TARGET_PROPERTY:Qt6::OpenGLWidgets,INTERFACE_INCLUDE_DIRECTORIES>
+    )
+    
+    target_link_directories(WhatsThePoint PRIVATE ${NDKDIR})
+    target_link_libraries(WhatsThePoint PRIVATE
+        DDImage
+        Qt6Core
+        Qt6Gui
+        Qt6Widgets
+        Qt6OpenGL
+        Qt6OpenGLWidgets
+        OpenGL
+    )
+    
+    # Strip RPATH with patchelf
+    find_program(PATCHELF patchelf)
+    if(PATCHELF)
+        add_custom_command(TARGET WhatsThePoint POST_BUILD
+            COMMAND ${PATCHELF} --remove-rpath $<TARGET_FILE:WhatsThePoint>
+            COMMENT "Removing RPATH/RUNPATH for portability"
+        )
+        message(STATUS "patchelf found: ${PATCHELF}")
+    endif()
+endif()
+
+# ============================================================================
+# Installation
+# ============================================================================
+if(WIN32)
+    if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+        set(CMAKE_INSTALL_PREFIX "$ENV{USERPROFILE}/.nuke" 
+            CACHE PATH "Install path" FORCE)
+    endif()
+    install(TARGETS WhatsThePoint RUNTIME DESTINATION . LIBRARY DESTINATION .)
+else()
+    install(TARGETS WhatsThePoint DESTINATION ${CMAKE_INSTALL_PREFIX})
+endif()
+
+# ============================================================================
+# Build Summary
+# ============================================================================
+message(STATUS "========================================")
+message(STATUS "Build Configuration:")
+message(STATUS "  Platform: ${CMAKE_SYSTEM_NAME}")
+if(WIN32)
+    message(STATUS "  Plugin: WhatsThePoint.dll")
+    message(STATUS "  Runtime: STATIC (/MT)")
+    message(STATUS "  Qt6 Build: ${Qt6_ROOT} (.lib)")
+    message(STATUS "  Qt6 Runtime: Nuke's Qt6 DLLs")
+else()
+    message(STATUS "  Plugin: WhatsThePoint.so")
+    message(STATUS "  RPATH: Stripped (portable)")
+    message(STATUS "  Qt6 Headers: ${Qt6_ROOT}")
+    message(STATUS "  Qt6 Runtime: Nuke's Qt6")
+endif()
+message(STATUS "  Nuke Version: ${NUKE_VERSION}")
+message(STATUS "  Nuke Directory: ${NDKDIR}")
+message(STATUS "  Install Prefix: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "========================================")
+if(WIN32)
+    message(STATUS "Build Commands:")
+    message(STATUS "  cmake -B build -G \"Visual Studio 17 2022\" -A x64")
+    message(STATUS "  cmake --build build --config Release")
+else()
+    message(STATUS "Build Commands:")
+    message(STATUS "  cmake -B build -DNUKE_VERSION=${NUKE_VERSION}")
+    message(STATUS "  cmake --build build")
+endif()
+message(STATUS "========================================")
