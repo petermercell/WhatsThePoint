@@ -1,0 +1,218 @@
+cmake_minimum_required(VERSION 3.16)
+
+project(WhatsThePoint LANGUAGES CXX)
+
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+
+# ============================================================================
+# macOS-specific Configuration
+# ============================================================================
+if(NOT APPLE)
+    message(FATAL_ERROR "This CMakeLists.txt is for macOS only")
+endif()
+
+# Architecture - Apple Silicon (arm64) by default
+if(NOT DEFINED CMAKE_OSX_ARCHITECTURES)
+    set(CMAKE_OSX_ARCHITECTURES "arm64")
+endif()
+message(STATUS "Building for architecture: ${CMAKE_OSX_ARCHITECTURES}")
+
+# ============================================================================
+# RPATH Configuration - Make plugin portable
+# ============================================================================
+set(CMAKE_SKIP_BUILD_RPATH FALSE)
+set(CMAKE_BUILD_WITH_INSTALL_RPATH TRUE)
+set(CMAKE_INSTALL_RPATH "@loader_path;@executable_path/../Frameworks")
+set(CMAKE_INSTALL_RPATH_USE_LINK_PATH FALSE)
+set(CMAKE_MACOSX_RPATH ON)
+
+# ============================================================================
+# Nuke Configuration
+# ============================================================================
+if(NOT DEFINED NUKE_VERSION)
+    set(NUKE_VERSION "16.0v6")
+endif()
+
+if(NOT DEFINED NDKDIR)
+    set(NDKDIR "/Applications/Nuke${NUKE_VERSION}/Nuke${NUKE_VERSION}.app/Contents")
+endif()
+
+set(NUKE_MACOS_DIR "${NDKDIR}/MacOS")
+set(NUKE_FRAMEWORKS_DIR "${NDKDIR}/Frameworks")
+
+message(STATUS "Nuke Version: ${NUKE_VERSION}")
+message(STATUS "Nuke Directory: ${NDKDIR}")
+
+# Verify Nuke installation
+if(NOT EXISTS "${NDKDIR}")
+    message(FATAL_ERROR "Nuke directory not found: ${NDKDIR}")
+endif()
+if(NOT EXISTS "${NUKE_MACOS_DIR}/include")
+    message(FATAL_ERROR "Nuke include directory not found: ${NUKE_MACOS_DIR}/include")
+endif()
+
+# Find DDImage library
+find_library(DDIMAGE_LIBRARY DDImage PATHS "${NUKE_MACOS_DIR}" NO_DEFAULT_PATH)
+if(NOT DDIMAGE_LIBRARY)
+    message(FATAL_ERROR "DDImage library not found in: ${NUKE_MACOS_DIR}")
+else()
+    message(STATUS "DDImage found: ${DDIMAGE_LIBRARY}")
+endif()
+
+# ============================================================================
+# Qt6 Configuration - Use local Qt6 for AUTOMOC, link to Nuke's Qt6 frameworks
+# ============================================================================
+if(NOT DEFINED Qt6_ROOT)
+    # Try common locations
+    if(EXISTS "/opt/homebrew/opt/qt@6")
+        set(Qt6_ROOT "/opt/homebrew/opt/qt@6")
+    elseif(EXISTS "/opt/homebrew/opt/qt")
+        set(Qt6_ROOT "/opt/homebrew/opt/qt")
+    elseif(EXISTS "/usr/local/opt/qt@6")
+        set(Qt6_ROOT "/usr/local/opt/qt@6")
+    elseif(EXISTS "/Users/g/Qt/6.5.3/macos")
+        set(Qt6_ROOT "/Users/g/Qt/6.5.3/macos")
+    else()
+        message(WARNING "Qt6_ROOT not set. Set it with -DQt6_ROOT=/path/to/qt6")
+        message(WARNING "Install with: brew install qt@6")
+    endif()
+endif()
+
+if(Qt6_ROOT)
+    set(Qt6_DIR "${Qt6_ROOT}/lib/cmake/Qt6")
+    set(CMAKE_PREFIX_PATH "${Qt6_ROOT}" ${CMAKE_PREFIX_PATH})
+    message(STATUS "Qt6 ROOT: ${Qt6_ROOT}")
+endif()
+
+# ============================================================================
+# Compiler Configuration
+# ============================================================================
+set(CMAKE_AUTOMOC ON)
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+add_compile_options(-fPIC)
+
+# ============================================================================
+# Find Qt6 (for AUTOMOC and headers)
+# ============================================================================
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets OpenGLWidgets)
+
+message(STATUS "Qt6 cmake found: ${Qt6_DIR}")
+message(STATUS "Qt6 Version: ${Qt6_VERSION}")
+
+# ============================================================================
+# Find Nuke's Qt6 Frameworks
+# ============================================================================
+find_library(QT_CORE_FRAMEWORK QtCore PATHS "${NUKE_FRAMEWORKS_DIR}" NO_DEFAULT_PATH)
+find_library(QT_GUI_FRAMEWORK QtGui PATHS "${NUKE_FRAMEWORKS_DIR}" NO_DEFAULT_PATH)
+find_library(QT_WIDGETS_FRAMEWORK QtWidgets PATHS "${NUKE_FRAMEWORKS_DIR}" NO_DEFAULT_PATH)
+find_library(QT_OPENGL_FRAMEWORK QtOpenGL PATHS "${NUKE_FRAMEWORKS_DIR}" NO_DEFAULT_PATH)
+find_library(QT_OPENGLWIDGETS_FRAMEWORK QtOpenGLWidgets PATHS "${NUKE_FRAMEWORKS_DIR}" NO_DEFAULT_PATH)
+
+if(NOT QT_CORE_FRAMEWORK)
+    message(FATAL_ERROR "QtCore framework not found in: ${NUKE_FRAMEWORKS_DIR}")
+endif()
+
+message(STATUS "Using Nuke's Qt6 frameworks:")
+message(STATUS "  QtCore: ${QT_CORE_FRAMEWORK}")
+message(STATUS "  QtGui: ${QT_GUI_FRAMEWORK}")
+message(STATUS "  QtWidgets: ${QT_WIDGETS_FRAMEWORK}")
+
+# ============================================================================
+# OpenGL / FoundryGL Configuration
+# ============================================================================
+find_library(FOUNDRYGL_LIBRARY FoundryGL PATHS "${NUKE_FRAMEWORKS_DIR}" NO_DEFAULT_PATH)
+find_library(OPENGL_LIBRARY OpenGL)
+
+if(FOUNDRYGL_LIBRARY)
+    add_definitions(-DFOUNDRYGL_USE)
+    set(GL_LIBRARY ${FOUNDRYGL_LIBRARY})
+    message(STATUS "Using FoundryGL: ${FOUNDRYGL_LIBRARY}")
+else()
+    set(GL_LIBRARY ${OPENGL_LIBRARY})
+    message(STATUS "Using system OpenGL: ${OPENGL_LIBRARY}")
+endif()
+
+# ============================================================================
+# Build Library
+# ============================================================================
+add_library(WhatsThePoint SHARED src/WhatsThePoint.cpp)
+target_sources(WhatsThePoint PRIVATE src/PointsListWidget.moc)
+
+# Include directories - Nuke headers
+target_include_directories(WhatsThePoint PRIVATE "${NUKE_MACOS_DIR}/include")
+
+# Get Qt6 include directories for headers (from local Qt6 for AUTOMOC)
+target_include_directories(WhatsThePoint SYSTEM PRIVATE
+    $<TARGET_PROPERTY:Qt6::Core,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:Qt6::Gui,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:Qt6::Widgets,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:Qt6::OpenGL,INTERFACE_INCLUDE_DIRECTORIES>
+    $<TARGET_PROPERTY:Qt6::OpenGLWidgets,INTERFACE_INCLUDE_DIRECTORIES>
+)
+
+# Link to Nuke's libraries and Qt frameworks (minimal - like original)
+target_link_libraries(WhatsThePoint PRIVATE
+    ${DDIMAGE_LIBRARY}
+    ${GL_LIBRARY}
+    ${QT_CORE_FRAMEWORK}
+    ${QT_GUI_FRAMEWORK}
+    ${QT_WIDGETS_FRAMEWORK}
+)
+
+# Add optional Qt frameworks if available
+if(QT_OPENGL_FRAMEWORK)
+    target_link_libraries(WhatsThePoint PRIVATE ${QT_OPENGL_FRAMEWORK})
+endif()
+if(QT_OPENGLWIDGETS_FRAMEWORK)
+    target_link_libraries(WhatsThePoint PRIVATE ${QT_OPENGLWIDGETS_FRAMEWORK})
+endif()
+
+# Output settings
+set_target_properties(WhatsThePoint PROPERTIES
+    OUTPUT_NAME "WhatsThePoint"
+    PREFIX ""
+    SUFFIX ".dylib"
+    LIBRARY_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}
+)
+
+# ============================================================================
+# Post-build: Fix library paths for portability
+# ============================================================================
+add_custom_command(TARGET WhatsThePoint POST_BUILD
+    COMMAND install_name_tool -id "@rpath/WhatsThePoint.dylib" $<TARGET_FILE:WhatsThePoint>
+    COMMENT "Setting install name for portability"
+)
+
+# ============================================================================
+# Installation
+# ============================================================================
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "$ENV{HOME}/.nuke" 
+        CACHE PATH "Install path" FORCE)
+endif()
+
+install(TARGETS WhatsThePoint LIBRARY DESTINATION .)
+
+# ============================================================================
+# Build Summary
+# ============================================================================
+message(STATUS "========================================")
+message(STATUS "macOS Build Configuration:")
+message(STATUS "  Plugin: WhatsThePoint.dylib")
+message(STATUS "  Architecture: ${CMAKE_OSX_ARCHITECTURES}")
+message(STATUS "  Nuke Version: ${NUKE_VERSION}")
+message(STATUS "  Nuke Directory: ${NDKDIR}")
+message(STATUS "  Qt6 Headers: ${Qt6_ROOT}")
+message(STATUS "  Qt6 Runtime: Nuke's Qt6 frameworks (portable)")
+message(STATUS "  Install Prefix: ${CMAKE_INSTALL_PREFIX}")
+message(STATUS "========================================")
+message(STATUS "")
+message(STATUS "Build Commands:")
+message(STATUS "  cmake -B build -DNUKE_VERSION=${NUKE_VERSION}")
+message(STATUS "  cmake --build build")
+message(STATUS "  cmake --install build")
+message(STATUS "")
+message(STATUS "For Intel Mac:")
+message(STATUS "  cmake -B build -DCMAKE_OSX_ARCHITECTURES=x86_64")
+message(STATUS "========================================")
